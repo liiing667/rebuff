@@ -7,7 +7,8 @@ export type {
   VectorDbConfig,
 } from "./config";
 export {
-  RebuffError
+  RebuffError,
+  MAX_INPUT_LENGTH
 } from "./interface";
 export type {
   DetectRequest,

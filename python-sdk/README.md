@@ -61,6 +61,22 @@ if result.injection_detected:
     print("Possible injection detected. Take corrective action.")
 ```
 
+### Input budget
+
+All detection stages (input acceptance, fragment generation, heuristic
+scoring, and the detection response) share a single input budget,
+`MAX_INPUT_LENGTH` (10,000 characters by default). Inputs longer than the
+budget are truncated instead of rejected, so legitimate long documents remain
+usable, while empty or blank inputs are rejected with a `ValueError`. The
+budget can be tuned per call, and the response reports the budget that was
+applied:
+
+```python
+result = rb.detect_injection(user_input, max_input_length=5_000)
+print(result.max_input_length)  # 5000
+print(result.input_truncated)   # True if user_input was longer than the budget
+```
+
 ### Detect canary word leakage
 
 ```python

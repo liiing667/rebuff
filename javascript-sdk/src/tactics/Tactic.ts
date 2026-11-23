@@ -15,6 +15,7 @@ export default interface Tactic {
     // The threshold to use to determine if the tactic has detected prompt injection. At runtime,
     // the caller can provide a different threshold to override the default.
     defaultThreshold: number;
-    // Execute the tactic on the given input.
-    execute(input: string, thresholdOverride?: number): Promise<TacticExecution>;
+    // Execute the tactic on the given input. The input is bounded by the shared input budget
+    // (maxInputLength, in characters); tactics receive the input already truncated to this budget.
+    execute(input: string, thresholdOverride?: number, maxInputLength?: number): Promise<TacticExecution>;
 }

@@ -4,7 +4,11 @@ from typing import Optional, Tuple, Union
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel
 
-from rebuff.detect_pi_heuristics import detect_prompt_injection_using_heuristic_on_input
+from rebuff.detect_pi_heuristics import (
+    MAX_INPUT_LENGTH,
+    detect_prompt_injection_using_heuristic_on_input,
+    enforce_input_budget,
+)
 from rebuff.detect_pi_openai import (
     call_openai_to_detect_pi,
     render_prompt_for_pi_detection,
@@ -22,6 +26,8 @@ class RebuffDetectionResponse(BaseModel):
     max_heuristic_score: float
     max_model_score: float
     max_vector_score: float
+    max_input_length: int = MAX_INPUT_LENGTH
+    input_truncated: bool = False
     injection_detected: bool
 
 
@@ -55,6 +61,7 @@ class RebuffSdk:
         check_heuristic: bool = True,
         check_vector: bool = True,
         check_llm: bool = True,
+        max_input_length: int = MAX_INPUT_LENGTH,
     ) -> RebuffDetectionResponse:
         """
         Detects if the given user input contains an injection attempt.
@@ -67,16 +74,28 @@ class RebuffSdk:
             check_heuristic (bool, optional): Whether to run the heuristic check. Defaults to True.
             check_vector (bool, optional): Whether to run the vector check. Defaults to True.
             check_llm (bool, optional): Whether to run the language model check. Defaults to True.
+            max_input_length (int, optional): The shared input budget in characters. Inputs longer than
+                this are truncated to the budget; empty inputs are rejected. Defaults to MAX_INPUT_LENGTH.
 
         Returns:
             RebuffDetectionResponse
         """
 
+        # Input acceptance: enforce the shared input budget up front. Empty or
+        # blank input is rejected so it cannot bypass the budget; overlong
+        # input is truncated (not rejected) so legitimate long documents and
+        # short queries remain usable. Every downstream stage (fragment
+        # generation, heuristic scoring, vector check, language model check)
+        # and the response operate on the same budgeted input.
+        user_input, input_truncated = enforce_input_budget(
+            user_input, max_input_length
+        )
+
         injection_detected = False
 
         if check_heuristic:
             rebuff_heuristic_score = detect_prompt_injection_using_heuristic_on_input(
-                user_input
+                user_input, max_input_length
             )
 
         else:
@@ -121,6 +140,8 @@ class RebuffSdk:
             max_heuristic_score=max_heuristic_score,
             max_model_score=max_model_score,
             max_vector_score=max_vector_score,
+            max_input_length=max_input_length,
+            input_truncated=input_truncated,
             injection_detected=injection_detected,
         )
         return rebuff_response

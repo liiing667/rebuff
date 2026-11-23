@@ -1,6 +1,7 @@
 import {
   DetectRequest,
   DetectResponse,
+  MAX_INPUT_LENGTH,
   Rebuff,
   RebuffError,
   TacticResult,
@@ -73,6 +74,7 @@ export default class RebuffSdk implements Rebuff {
     userInput = "",
     userInputBase64 = "",
     tacticOverrides = [],
+    maxInputLength = MAX_INPUT_LENGTH,
   }: DetectRequest): Promise<DetectResponse> {
     if (userInputBase64) {
       // Create a buffer from the hexadecimal string
@@ -80,8 +82,20 @@ export default class RebuffSdk implements Rebuff {
       // Decode the buffer to a UTF-8 string
       userInput = userInputBuffer.toString("utf-8");
     }
-    if (!userInput) {
+    // Input acceptance: reject empty or blank input so it cannot bypass the
+    // budget, and truncate overlong input (instead of rejecting it) so
+    // legitimate long documents and short queries remain usable. Fragment
+    // generation, scoring, and the response all share this same budget.
+    if (!userInput || !userInput.trim()) {
       throw new RebuffError("userInput is required");
+    }
+    if (maxInputLength < 1) {
+      throw new RebuffError("maxInputLength must be a positive integer");
+    }
+    let inputTruncated = false;
+    if (userInput.length > maxInputLength) {
+      userInput = userInput.slice(0, maxInputLength);
+      inputTruncated = true;
     }
 
     const strategies = await this.getStrategies();
@@ -93,7 +107,7 @@ export default class RebuffSdk implements Rebuff {
         continue;
       }
       const threshold = tacticOverride?.threshold ?? tactic.defaultThreshold;
-      const execution = await tactic.execute(userInput, threshold);
+      const execution = await tactic.execute(userInput, threshold, maxInputLength);
       const result = {
         name: tactic.name,
         score: execution.score,
@@ -110,6 +124,8 @@ export default class RebuffSdk implements Rebuff {
     return {
       injectionDetected,
       tacticResults,
+      maxInputLength,
+      inputTruncated,
     } as DetectResponse;
   }
 

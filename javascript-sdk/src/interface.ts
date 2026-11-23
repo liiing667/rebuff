@@ -7,6 +7,14 @@ export enum TacticName {
   VectorDB = "vector_db",
 }
 
+// The unified input budget (in characters) shared by input acceptance,
+// fragment generation, scoring, and the detection response. Inputs longer
+// than this are truncated to the budget instead of being rejected, so
+// legitimate long documents remain usable while pathological inputs can no
+// longer stall the heuristic check. Empty or blank inputs are rejected so
+// they cannot bypass the budget.
+export const MAX_INPUT_LENGTH = 10_000;
+
 export interface TacticOverride {
   // The name of the tactic to override.
   name: TacticName;
@@ -25,6 +33,9 @@ export interface DetectRequest {
   // Any tactics to change behavior for. If any tactic is not specified, the default threshold for that tactic will be
   // used.
   tacticOverrides?: TacticOverride[];
+  // The shared input budget in characters. Inputs longer than this are truncated to the budget; empty inputs are
+  // rejected. Defaults to MAX_INPUT_LENGTH.
+  maxInputLength?: number;
 }
 
 export interface TacticResult {
@@ -49,6 +60,10 @@ export interface DetectResponse {
   injectionDetected: boolean;
   // The result for each tactic that was executed.
   tacticResults: TacticResult[];
+  // The input budget that bounded this detection, in characters.
+  maxInputLength?: number;
+  // Whether the input was truncated to fit the input budget.
+  inputTruncated?: boolean;
 }
 
 export class RebuffError extends Error {
