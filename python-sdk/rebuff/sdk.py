@@ -70,17 +70,27 @@ class RebuffSdk:
 
         Returns:
             RebuffDetectionResponse
+
+        Raises:
+            ValueError: If all detection checks are disabled, or if a check
+                fails to produce a score.
         """
 
-        injection_detected = False
+        if not (check_heuristic or check_vector or check_llm):
+            # With every check switched off there is no evidence to base a
+            # decision on, so refuse instead of reporting a "safe" result.
+            raise ValueError(
+                "At least one detection check must be enabled to detect prompt injection"
+            )
+
+        rebuff_heuristic_score = 0.0
+        rebuff_vector_score = 0.0
+        rebuff_model_score = 0.0
 
         if check_heuristic:
             rebuff_heuristic_score = detect_prompt_injection_using_heuristic_on_input(
                 user_input
             )
-
-        else:
-            rebuff_heuristic_score = 0
 
         if check_vector:
             self.initialize_pinecone()
@@ -90,26 +100,27 @@ class RebuffSdk:
             )
             rebuff_vector_score = vector_score["top_score"]
 
-        else:
-            rebuff_vector_score = 0
-
         if check_llm:
             rendered_input = render_prompt_for_pi_detection(user_input)
             model_response = call_openai_to_detect_pi(
                 rendered_input, self.openai_model, self.openai_apikey
             )
 
-            rebuff_model_score = float(model_response.get("completion", 0))
+            completion = model_response.get("completion")
+            if completion is None:
+                # A failed check must surface as an error, not as a 0 score.
+                raise ValueError(
+                    "Language model check did not return a completion"
+                )
+            rebuff_model_score = float(completion)
 
-        else:
-            rebuff_model_score = 0
-
-        if (
-            rebuff_heuristic_score > max_heuristic_score
-            or rebuff_model_score > max_model_score
-            or rebuff_vector_score > max_vector_score
-        ):
-            injection_detected = True
+        # The final decision is derived from the same policy that selected
+        # which checks ran: only scores from enabled checks participate.
+        injection_detected = (
+            (check_heuristic and rebuff_heuristic_score > max_heuristic_score)
+            or (check_vector and rebuff_vector_score > max_vector_score)
+            or (check_llm and rebuff_model_score > max_model_score)
+        )
 
         rebuff_response = RebuffDetectionResponse(
             heuristic_score=rebuff_heuristic_score,

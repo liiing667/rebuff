@@ -1,32 +1,57 @@
 import secrets
-from typing import Any, Dict, Optional, Tuple, Union
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class TacticName(str, Enum):
+    # A series of heuristics are used to determine whether the input is prompt injection.
+    heuristic = "heuristic"
+    # A language model is asked if the input appears to be prompt injection.
+    language_model = "language_model"
+    # A vector database of known prompt injection attacks is queried for similarity.
+    vector_db = "vector_db"
+
+
+class TacticOverride(BaseModel):
+    # The name of the tactic to override.
+    name: TacticName
+    # The threshold to use for this tactic. If the score is above this threshold,
+    # the tactic will be considered detected. If not specified, the default
+    # threshold for the tactic will be used.
+    threshold: Optional[float] = None
+    # Whether to run this tactic. Defaults to true if not specified.
+    run: Optional[bool] = None
+
+
+class TacticResult(BaseModel):
+    # The name of the tactic.
+    name: str
+    # The score for the tactic, between 0 and 1. The closer to 1, the more
+    # likely that this is a prompt injection attempt.
+    score: float
+    # Whether this tactic evaluated the input as a prompt injection attempt.
+    detected: bool
+    # The threshold used for this tactic.
+    threshold: float
+    # Some tactics return additional fields, e.g. "countOverMaxVectorScore".
+    additionalFields: Dict[str, Any] = Field(default_factory=dict)
 
 
 class DetectApiRequest(BaseModel):
     userInput: str
     userInputBase64: Optional[str] = None
-    runHeuristicCheck: bool
-    runVectorCheck: bool
-    runLanguageModelCheck: bool
-    maxHeuristicScore: float
-    maxModelScore: float
-    maxVectorScore: float
+    tacticOverrides: List[TacticOverride] = Field(default_factory=list)
 
 
 class DetectApiSuccessResponse(BaseModel):
-    heuristicScore: float
-    modelScore: float
-    vectorScore: Dict[str, float]
-    runHeuristicCheck: bool
-    runVectorCheck: bool
-    runLanguageModelCheck: bool
-    maxHeuristicScore: float
-    maxModelScore: float
-    maxVectorScore: float
+    # Whether prompt injection was detected.
     injectionDetected: bool
+    # The result for each tactic that was executed, i.e. the evidence of
+    # which checks actually ran.
+    tacticResults: List[TacticResult]
 
 
 class ApiFailureResponse(BaseModel):
@@ -52,7 +77,7 @@ class Rebuff:
         check_heuristic: bool = True,
         check_vector: bool = True,
         check_llm: bool = True,
-    ) -> Union[DetectApiSuccessResponse, ApiFailureResponse]:
+    ) -> DetectApiSuccessResponse:
         """
         Detects if the given user input contains an injection attempt.
 
@@ -66,43 +91,55 @@ class Rebuff:
             check_llm (bool, optional): Whether to run the language model check. Defaults to True.
 
         Returns:
-            Tuple[Union[DetectApiSuccessResponse, ApiFailureResponse], bool]: A tuple containing the detection
-                metrics and a boolean indicating if an injection was detected.
+            DetectApiSuccessResponse: The server's detection response, including which
+                checks actually ran (tacticResults) and the final decision (injectionDetected).
+
+        Raises:
+            ValueError: If all detection checks are disabled.
         """
+        if not (check_heuristic or check_vector or check_llm):
+            # With every check switched off there is no evidence to base a
+            # decision on, so refuse instead of reporting a "safe" result.
+            raise ValueError(
+                "At least one detection check must be enabled to detect prompt injection"
+            )
+
+        # Channel selection and thresholds form a single policy that the
+        # server executes; the response carries the evidence of what ran.
         request_data = DetectApiRequest(
-            userInput=user_input,
+            userInput="",
             userInputBase64=encode_string(user_input),
-            runHeuristicCheck=check_heuristic,
-            runVectorCheck=check_vector,
-            runLanguageModelCheck=check_llm,
-            maxVectorScore=max_vector_score,
-            maxModelScore=max_model_score,
-            maxHeuristicScore=max_heuristic_score,
+            tacticOverrides=[
+                TacticOverride(
+                    name=TacticName.heuristic,
+                    threshold=max_heuristic_score,
+                    run=check_heuristic,
+                ),
+                TacticOverride(
+                    name=TacticName.vector_db,
+                    threshold=max_vector_score,
+                    run=check_vector,
+                ),
+                TacticOverride(
+                    name=TacticName.language_model,
+                    threshold=max_model_score,
+                    run=check_llm,
+                ),
+            ],
         )
 
         response = requests.post(
             f"{self.api_url}/api/detect",
-            json=request_data.dict(),
+            json=request_data.model_dump(),
             headers=self._headers,
         )
 
         response.raise_for_status()
 
-        response_json = response.json()
-        success_response = DetectApiSuccessResponse.parse_obj(response_json)
-
-        if (
-            success_response.heuristicScore > max_heuristic_score
-            or success_response.modelScore > max_model_score
-            or success_response.vectorScore["topScore"] > max_vector_score
-        ):
-            # Injection detected
-            success_response.injectionDetected = True
-            return success_response
-        else:
-            # No injection detected
-            success_response.injectionDetected = False
-            return success_response
+        # The server response is the single source of truth: it declares which
+        # checks actually ran (tacticResults) and the final decision
+        # (injectionDetected). Do not re-evaluate scores locally.
+        return DetectApiSuccessResponse.model_validate(response.json())
 
     @staticmethod
     def generate_canary_word(length: int = 8) -> str:

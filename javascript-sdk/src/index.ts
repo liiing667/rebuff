@@ -7,13 +7,13 @@ export type {
   VectorDbConfig,
 } from "./config";
 export {
-  RebuffError
+  RebuffError,
+  TacticName
 } from "./interface";
 export type {
   DetectRequest,
   DetectResponse,
   Rebuff,
-  TacticName,
   TacticOverride,
   TacticResult
 } from "./interface";

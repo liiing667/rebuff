@@ -443,4 +443,59 @@ describe("Rebuff API tests", function () {
       });
     });
   });
+
+  describe("detect_injection_tactic_toggles", () => {
+    it("should throw when all tactics are disabled", async () => {
+      let thrown: Error | null = null;
+      try {
+        await rb.detectInjection({
+          userInput: prompt_injection_inputs[0],
+          tacticOverrides: [
+            { name: TacticName.Heuristic, run: false },
+            { name: TacticName.VectorDB, run: false },
+            { name: TacticName.LanguageModel, run: false },
+          ],
+        });
+      } catch (e) {
+        thrown = e as Error;
+      }
+      expect(thrown).to.not.be.null;
+      expect(thrown!.message).to.match(/at least one/i);
+    });
+
+    // Single-layer, double-layer and all-layer combinations: the returned
+    // tacticResults are the evidence of which checks actually ran.
+    const toggleCombinations: [TacticName[]] = [
+      [[TacticName.Heuristic]],
+      [[TacticName.VectorDB]],
+      [[TacticName.LanguageModel]],
+      [[TacticName.Heuristic, TacticName.VectorDB]],
+      [[TacticName.Heuristic, TacticName.LanguageModel]],
+      [[TacticName.VectorDB, TacticName.LanguageModel]],
+      [[TacticName.Heuristic, TacticName.VectorDB, TacticName.LanguageModel]],
+    ];
+
+    toggleCombinations.forEach(([enabledTactics]) => {
+      it(`should only run the enabled tactics: ${enabledTactics.join(", ")}`, async () => {
+        const allTactics = [
+          TacticName.Heuristic,
+          TacticName.VectorDB,
+          TacticName.LanguageModel,
+        ];
+        const detectResponse = await rb.detectInjection({
+          userInput: benign_inputs[0],
+          tacticOverrides: allTactics.map((name) => ({
+            name,
+            run: enabledTactics.includes(name),
+          })),
+        });
+
+        const ranTactics = detectResponse.tacticResults.map((r) => r.name);
+        expect(ranTactics).to.have.members(enabledTactics);
+        expect(detectResponse.injectionDetected).to.equal(
+          detectResponse.tacticResults.some((r) => r.detected)
+        );
+      });
+    });
+  });
 });

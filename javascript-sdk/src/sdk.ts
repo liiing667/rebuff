@@ -85,13 +85,22 @@ export default class RebuffSdk implements Rebuff {
     }
 
     const strategies = await this.getStrategies();
+    const tactics = strategies[this.defaultStrategy].tactics;
+    const enabledTactics = tactics.filter((tactic) => {
+      const tacticOverride = tacticOverrides.find((t) => t.name === tactic.name);
+      return !tacticOverride || tacticOverride.run !== false;
+    });
+    if (enabledTactics.length === 0) {
+      // With every tactic switched off there is no evidence to base a
+      // decision on, so refuse instead of reporting a "safe" result.
+      throw new RebuffError(
+        "At least one tactic must be enabled to detect prompt injection"
+      );
+    }
     let injectionDetected = false;
-    let tacticResults: TacticResult[] = [];
-    for (const tactic of strategies[this.defaultStrategy].tactics) {
-      const tacticOverride = tacticOverrides.find(t => t.name === tactic.name);
-      if (tacticOverride && tacticOverride.run === false) {
-        continue;
-      }
+    const tacticResults: TacticResult[] = [];
+    for (const tactic of enabledTactics) {
+      const tacticOverride = tacticOverrides.find((t) => t.name === tactic.name);
       const threshold = tacticOverride?.threshold ?? tactic.defaultThreshold;
       const execution = await tactic.execute(userInput, threshold);
       const result = {

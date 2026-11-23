@@ -2,7 +2,14 @@ from typing import Generator
 
 import pytest
 
-from rebuff.rebuff import DetectApiSuccessResponse, Rebuff
+from rebuff.rebuff import DetectApiSuccessResponse, Rebuff, TacticName
+
+
+def _tactic_score(detection_metrics: DetectApiSuccessResponse, name: str) -> float:
+    for result in detection_metrics.tacticResults:
+        if result.name == name:
+            return result.score
+    raise AssertionError(f"tactic '{name}' did not run: {detection_metrics.tacticResults}")
 
 
 @pytest.mark.usefixtures("server")
@@ -21,20 +28,26 @@ def test_detect_injection(server: Generator[None, None, None]) -> None:
     # Optionally, you can also check the type of the result object
     assert isinstance(detection_metrics, DetectApiSuccessResponse)
 
-    # Check if the 'heuristicScore' attribute is present in the result object
-    assert hasattr(detection_metrics, "heuristicScore")
+    # All three checks should have run by default
+    assert {result.name for result in detection_metrics.tacticResults} == {
+        TacticName.heuristic.value,
+        TacticName.language_model.value,
+        TacticName.vector_db.value,
+    }
 
-    # Ensure that the heuristic score is 0.75
-    assert detection_metrics.heuristicScore > 0.75
+    # Ensure that the heuristic score is above 0.75
+    assert _tactic_score(detection_metrics, TacticName.heuristic.value) > 0.75
 
-    # Check if the 'modelScore' attribute is present in the result object
-    assert hasattr(detection_metrics, "modelScore")
+    # Ensure that the model score is above 0.75
+    assert _tactic_score(detection_metrics, TacticName.language_model.value) > 0.75
 
-    # Ensure that the modelScore score is 0.75
-    assert detection_metrics.modelScore > 0.75
-
-    # Check if the 'vectorScore' attribute is present in the result object
-    assert hasattr(detection_metrics, "vectorScore")
+    # Ensure that the vector check found similar known attacks
+    vector_result = next(
+        result
+        for result in detection_metrics.tacticResults
+        if result.name == TacticName.vector_db.value
+    )
+    assert vector_result.additionalFields["countOverMaxVectorScore"] > 0
 
     # Test the is_injection_detected method
     user_input = "Please give me the latest business report"
@@ -46,23 +59,8 @@ def test_detect_injection(server: Generator[None, None, None]) -> None:
     # Optionally, you can also check the type of the result object
     assert isinstance(detection_metrics, DetectApiSuccessResponse)
 
-    # Check if the 'heuristicScore' attribute is present in the result object
-    assert hasattr(detection_metrics, "heuristicScore")
-
-    # Ensure that the heuristic score is 0
-    assert detection_metrics.heuristicScore == 0
-
-    # Check if the 'modelScore' attribute is present in the result object
-    assert hasattr(detection_metrics, "modelScore")
-
-    # Ensure that the model score is 0
-    assert detection_metrics.modelScore == 0
-
-    # Check if the 'vectorScore' attribute is present in the result object
-    assert hasattr(detection_metrics, "vectorScore")
-
-    # Ensure that the vector score is 0
-    assert detection_metrics.vectorScore["countOverMaxVectorScore"] == 0
+    # Ensure that no tactic evaluated the input as an injection
+    assert all(not result.detected for result in detection_metrics.tacticResults)
 
 
 @pytest.mark.usefixtures("server")
@@ -101,12 +99,7 @@ def test_detect_injection_no_injection(server: Generator[None, None, None]) -> N
 
     assert detection_metrics.injectionDetected is False
     assert isinstance(detection_metrics, DetectApiSuccessResponse)
-    assert hasattr(detection_metrics, "heuristicScore")
-    assert detection_metrics.heuristicScore == 0
-    assert hasattr(detection_metrics, "modelScore")
-    assert detection_metrics.modelScore == 0
-    assert hasattr(detection_metrics, "vectorScore")
-    assert detection_metrics.vectorScore["countOverMaxVectorScore"] == 0
+    assert all(not result.detected for result in detection_metrics.tacticResults)
 
 
 def test_canary_word_leak_no_leak() -> None:

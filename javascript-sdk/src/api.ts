@@ -44,25 +44,16 @@ export default class RebuffApi implements Rebuff {
 
   async detectInjection({
     userInput = "",
-    maxHeuristicScore = 0.75,
-    maxVectorScore = 0.9,
-    maxModelScore = 0.9,
-    runHeuristicCheck = true,
-    runVectorCheck = true,
-    runLanguageModelCheck = true,
+    userInputBase64 = "",
+    tacticOverrides = [],
   }: DetectRequest): Promise<DetectResponse> {
-    if (userInput === null) {
+    if (!userInput && !userInputBase64) {
       throw new RebuffError("userInput is required");
     }
     const requestData: DetectRequest = {
       userInput: "",
-      userInputBase64: encodeString(userInput),
-      runHeuristicCheck: runHeuristicCheck,
-      runVectorCheck: runVectorCheck,
-      runLanguageModelCheck: runLanguageModelCheck,
-      maxVectorScore,
-      maxModelScore,
-      maxHeuristicScore,
+      userInputBase64: userInputBase64 || encodeString(userInput),
+      tacticOverrides,
     };
 
     const response = await fetch(`${this.apiUrl}/api/detect`, {
@@ -76,10 +67,10 @@ export default class RebuffApi implements Rebuff {
     if (!response.ok) {
       throw new RebuffError((responseData as any)?.message);
     }
-    responseData.injectionDetected =
-      responseData.heuristicScore > maxHeuristicScore ||
-      responseData.modelScore > maxModelScore ||
-      responseData.vectorScore.topScore > maxVectorScore;
+    // The server response is the single source of truth: it declares which
+    // tactics actually ran (tacticResults) and the final decision
+    // (injectionDetected). Return it as-is instead of re-evaluating scores
+    // against a local copy of the thresholds.
     return responseData;
   }
 

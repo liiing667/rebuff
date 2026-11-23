@@ -4,7 +4,8 @@ import { User } from "@supabase/auth-helpers-react";
 import Cors from "cors";
 import { getSupabaseUser } from "@/lib/supabase";
 import { getUserAccountFromDb, logAttempt } from "@/lib/account-helpers";
-import { RebuffApi } from "rebuff";
+import { RebuffApi, TacticName } from "rebuff";
+import type { TacticOverride } from "rebuff";
 import { PromptResponse } from "@types";
 import {
   getEnvironmentVariable,
@@ -121,14 +122,16 @@ async function getResponse(
   const rebuffApiUrl = getEnvironmentVariable("REBUFF_API") || undefined;
   // use rebuff to check if this is a prompt injection
   const rebuff = new RebuffApi({ apiKey: apikey, apiUrl: rebuffApiUrl });
+  // Channel selection and thresholds form a single policy that the detection
+  // engine executes; the response carries the evidence of what actually ran.
+  const tacticOverrides: TacticOverride[] = [
+    { name: TacticName.Heuristic, threshold: maxHeuristicScore, run: runHeuristicCheck },
+    { name: TacticName.VectorDB, threshold: maxVectorScore, run: runVectorCheck },
+    { name: TacticName.LanguageModel, threshold: maxModelScore, run: runLanguageModelCheck },
+  ];
   const detection = await rebuff.detectInjection({
     userInput,
-    maxHeuristicScore,
-    maxVectorScore,
-    maxModelScore,
-    runHeuristicCheck,
-    runVectorCheck,
-    runLanguageModelCheck,
+    tacticOverrides,
   });
 
   if (detection.injectionDetected) {

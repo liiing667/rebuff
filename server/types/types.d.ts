@@ -22,16 +22,18 @@ export interface PromptResponse {
 }
 
 export interface DetectResponse {
-  heuristicScore: number;
-  modelScore: number;
-  vectorScore: Record<string, number>;
-  runHeuristicCheck: boolean;
-  runVectorCheck: boolean;
-  runLanguageModelCheck: boolean;
-  maxHeuristicScore: number;
-  maxVectorScore: number;
-  maxModelScore: number;
   injectionDetected: boolean;
+  tacticResults: TacticResult[];
+}
+
+export type TacticName = "heuristic" | "language_model" | "vector_db";
+
+export interface TacticResult {
+  name: TacticName;
+  score: number;
+  detected: boolean;
+  threshold: number;
+  additionalFields: Record<string, any>;
 }
 
 interface PlaygroundStats {
