@@ -3,7 +3,11 @@ import { pinecone } from "@/lib/pinecone-client";
 import stringSimilarity from "string-similarity";
 import { supabaseAdminClient } from "@/lib/supabase";
 import { openai } from "@/lib/openai";
-import { getEnvironmentVariable, normalizeString } from "@/lib/general-helpers";
+import {
+  getEnvironmentVariable,
+  isCompleteValidScore,
+  normalizeString,
+} from "@/lib/general-helpers";
 type MiddlewareCallback = (result: any) => void;
 
 export function runMiddleware(
@@ -302,13 +306,21 @@ export async function callOpenAiToDetectPI(
       messages: [{ role: "user", content: promptToDetectPiUsingOpenAI }],
     });
 
+    if (completion.data.choices.length === 0) {
+      console.log("completion.data.choices.length === 0");
+      return { completion: "", error: "server_error" };
+    }
+
     if (completion.data.choices[0].message === undefined) {
       console.log("completion.data.choices[0].message is undefined");
       return { completion: "", error: "server_error" };
     }
 
-    if (completion.data.choices.length === 0) {
-      console.log("completion.data.choices.length === 0");
+    // Only a complete, valid score is accepted. Multiple numbers, surrounding
+    // explanations, or empty content are rejected instead of being silently
+    // treated as a safe score.
+    if (!isCompleteValidScore(completion.data.choices[0].message.content)) {
+      console.log("completion is not a complete valid score");
       return { completion: "", error: "server_error" };
     }
 

@@ -1,6 +1,7 @@
 import { RebuffError, TacticName } from "../interface";
 import { OpenAIApi } from "openai";
 import { renderPromptForPiDetection } from "../lib/prompts";
+import { parseScoreFromCompletion } from "../lib/score";
 import Tactic, { TacticExecution } from "./Tactic";
 
 export default class OpenAI implements Tactic {
@@ -29,8 +30,12 @@ export default class OpenAI implements Tactic {
         throw new Error("completion.data.choices[0].message is undefined");
       }
 
-      // FIXME: Handle when parseFloat returns NaN.
-      const score = parseFloat(completion.data.choices[0].message.content || "");
+      // Only a complete, valid score is accepted. Multiple numbers,
+      // surrounding explanations, or empty content are rejected instead of
+      // being silently treated as a safe score.
+      const score = parseScoreFromCompletion(
+        completion.data.choices[0].message.content || ""
+      );
       return { score };
     } catch (error) {
       console.error("Error in callOpenAiToDetectPI:", error);

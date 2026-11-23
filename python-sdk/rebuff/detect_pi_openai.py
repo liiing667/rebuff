@@ -1,6 +1,43 @@
+import re
 from typing import Dict
 
 from openai import OpenAI
+
+# A complete, valid score is a single floating point number and nothing else
+# (leading/trailing whitespace is tolerated). Responses that contain multiple
+# numbers, explanatory text before or after the number, or no number at all
+# are rejected.
+_SCORE_PATTERN = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)$")
+
+
+def parse_score_from_completion(completion: str) -> float:
+    """
+    Parse the score returned by the language model.
+
+    The completion must consist of exactly one valid floating point number and
+    nothing else (surrounding whitespace is ignored).
+
+    Args:
+        completion (str): The raw completion returned by the language model.
+
+    Returns:
+        float: The parsed score.
+
+    Raises:
+        ValueError: If the completion is empty, contains multiple numbers, or
+            contains anything other than a single floating point number.
+    """
+    if completion is None:
+        raise ValueError("Language model returned an empty completion")
+
+    text = completion.strip()
+    if not text:
+        raise ValueError("Language model returned an empty completion")
+
+    if not _SCORE_PATTERN.match(text):
+        raise ValueError(f"Language model returned an invalid score: {completion!r}")
+
+    return float(text)
 
 
 def render_prompt_for_pi_detection(user_input: str) -> str:
@@ -74,10 +111,10 @@ def call_openai_to_detect_pi(
         messages=[{"role": "user", "content": prompt_to_detect_pi_using_openai}],
     )
 
-    if completion.choices[0].message.content is None:
+    if len(completion.choices) == 0:
         raise Exception("server error")
 
-    if len(completion.choices) == 0:
+    if completion.choices[0].message.content is None:
         raise Exception("server error")
 
     response = {"completion": completion.choices[0].message.content}

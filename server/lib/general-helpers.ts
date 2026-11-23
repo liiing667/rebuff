@@ -6,6 +6,23 @@ export function getEnvironmentVariable(key: string): string {
   return value;
 }
 
+// A complete, valid score is a single floating point number and nothing else
+// (leading/trailing whitespace is tolerated). Responses that contain multiple
+// numbers, explanatory text before or after the number, or no number at all
+// are rejected.
+const SCORE_PATTERN = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
+
+export function isCompleteValidScore(completion: string): boolean {
+  if (typeof completion !== "string") {
+    return false;
+  }
+  const text = completion.trim();
+  if (text === "") {
+    return false;
+  }
+  return SCORE_PATTERN.test(text);
+}
+
 // Normalize a string by converting to lowercase and removing extra spaces and punctuation
 export function normalizeString(str: string): string {
   return str

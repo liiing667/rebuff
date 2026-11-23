@@ -76,10 +76,30 @@ export default class RebuffApi implements Rebuff {
     if (!response.ok) {
       throw new RebuffError((responseData as any)?.message);
     }
-    responseData.injectionDetected =
-      responseData.heuristicScore > maxHeuristicScore ||
-      responseData.modelScore > maxModelScore ||
-      responseData.vectorScore.topScore > maxVectorScore;
+
+    // The final decision must be based on complete, valid scores only. If any
+    // tactic result is missing or holds an invalid score, the response cannot
+    // be trusted and must not be treated as "no injection".
+    const tacticResults = responseData.tacticResults;
+    if (!Array.isArray(tacticResults)) {
+      throw new RebuffError(
+        "Invalid detection response: missing tactic results"
+      );
+    }
+    for (const result of tacticResults) {
+      if (
+        result === null ||
+        typeof result.score !== "number" ||
+        !isFinite(result.score)
+      ) {
+        throw new RebuffError(
+          "Invalid detection response: tactic score is not a valid number"
+        );
+      }
+    }
+    responseData.injectionDetected = tacticResults.some(
+      (result) => result.score > result.threshold
+    );
     return responseData;
   }
 
