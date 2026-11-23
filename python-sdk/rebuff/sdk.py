@@ -38,6 +38,21 @@ class RebuffSdk:
         self.pinecone_apikey = pinecone_apikey
         self.pinecone_index = pinecone_index
         self.vector_store = None
+        # Monotonic query generation. Every index (re)initialisation or
+        # mutation starts a new generation so that stale vector evidence can
+        # never leak into a judgment made after the refresh.
+        self._query_generation = 0
+
+    @property
+    def query_generation(self) -> int:
+        """
+        The current query generation of the vector index.
+
+        The query, the collected scores, the threshold evidence and the
+        injection consumer all share this generation; results stamped with an
+        older generation are discarded as stale.
+        """
+        return self._query_generation
 
     def initialize_pinecone(self) -> None:
         self.vector_store = init_pinecone(
@@ -45,6 +60,9 @@ class RebuffSdk:
             self.pinecone_index,
             self.openai_apikey,
         )
+        # The index was (re)initialised: everything queried from now on
+        # belongs to a new query generation.
+        self._query_generation += 1
 
     def detect_injection(
         self,
@@ -83,11 +101,31 @@ class RebuffSdk:
             rebuff_heuristic_score = 0
 
         if check_vector:
-            self.initialize_pinecone()
+            if self.vector_store is None:
+                self.initialize_pinecone()
 
+            query_generation = self._query_generation
             vector_score = detect_pi_using_vector_database(
-                user_input, max_vector_score, self.vector_store
+                user_input, max_vector_score, self.vector_store, query_generation
             )
+
+            if vector_score["query_generation"] != self._query_generation:
+                # The index was refreshed while the query was in flight; the
+                # collected evidence is stale. Re-query once against the
+                # current generation instead of judging on old results.
+                query_generation = self._query_generation
+                vector_score = detect_pi_using_vector_database(
+                    user_input, max_vector_score, self.vector_store, query_generation
+                )
+
+                if vector_score["query_generation"] != self._query_generation:
+                    # Still stale: refuse to use the old evidence at all.
+                    vector_score = {
+                        "top_score": 0,
+                        "count_over_max_vector_score": 0,
+                        "query_generation": query_generation,
+                    }
+
             rebuff_vector_score = vector_score["top_score"]
 
         else:
@@ -219,5 +257,7 @@ class RebuffSdk:
             [user_input],
             metadatas=[{"completion": completion, "canary_word": canary_word}],
         )
+        # The index was mutated: previous query results are now stale.
+        self._query_generation += 1
 
         return None

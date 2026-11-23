@@ -143,15 +143,16 @@ export async function detectPiUsingVectorDatabase(
 
     if (queryResponse.matches != undefined) {
       for (const match of queryResponse.matches) {
-        if (match.score == undefined) {
-          continue;
+        // Unknown scores stay in the score set as 0 instead of being
+        // silently dropped.
+        const score = match.score ?? 0;
+
+        // Tied scores are still top scores.
+        if (score >= topScore) {
+          topScore = score;
         }
 
-        if (match.score > topScore) {
-          topScore = match.score;
-        }
-
-        if (match.score >= similarityThreshold && match.score > topScore) {
+        if (score >= similarityThreshold) {
           countOverMaxVectorScore++;
         }
       }
