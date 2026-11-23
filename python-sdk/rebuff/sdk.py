@@ -10,6 +10,7 @@ from rebuff.detect_pi_openai import (
     render_prompt_for_pi_detection,
 )
 from rebuff.detect_pi_vectorbase import detect_pi_using_vector_database, init_pinecone
+from rebuff.validation import validate_boolean, validate_threshold
 
 
 class RebuffDetectionResponse(BaseModel):
@@ -71,6 +72,20 @@ class RebuffSdk:
         Returns:
             RebuffDetectionResponse
         """
+
+        # Reject NaN, Infinity, negative or out-of-range thresholds and
+        # non-boolean flags before any detection work runs. The 0 and 1
+        # boundaries and the default thresholds remain valid.
+        max_heuristic_score = validate_threshold(
+            max_heuristic_score, "max_heuristic_score"
+        )
+        max_vector_score = validate_threshold(
+            max_vector_score, "max_vector_score"
+        )
+        max_model_score = validate_threshold(max_model_score, "max_model_score")
+        check_heuristic = validate_boolean(check_heuristic, "check_heuristic")
+        check_vector = validate_boolean(check_vector, "check_vector")
+        check_llm = validate_boolean(check_llm, "check_llm")
 
         injection_detected = False
 

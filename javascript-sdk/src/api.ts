@@ -7,6 +7,7 @@ import {
 import fetch from "node-fetch";
 import crypto from "crypto";
 import { ApiConfig } from "./config";
+import { validateBoolean, validateThreshold } from "./validation";
 
 function encodeString(message: string): string {
   return Buffer.from(message, "utf-8").toString("hex");
@@ -54,6 +55,17 @@ export default class RebuffApi implements Rebuff {
     if (userInput === null) {
       throw new RebuffError("userInput is required");
     }
+
+    // Reject NaN, Infinity, negative or out-of-range thresholds and non-boolean
+    // flags before the request leaves the client. The 0 and 1 boundaries and the
+    // default thresholds all remain valid.
+    validateThreshold(maxHeuristicScore, "maxHeuristicScore");
+    validateThreshold(maxVectorScore, "maxVectorScore");
+    validateThreshold(maxModelScore, "maxModelScore");
+    validateBoolean(runHeuristicCheck, "runHeuristicCheck");
+    validateBoolean(runVectorCheck, "runVectorCheck");
+    validateBoolean(runLanguageModelCheck, "runLanguageModelCheck");
+
     const requestData: DetectRequest = {
       userInput: "",
       userInputBase64: encodeString(userInput),
@@ -76,10 +88,15 @@ export default class RebuffApi implements Rebuff {
     if (!response.ok) {
       throw new RebuffError((responseData as any)?.message);
     }
-    responseData.injectionDetected =
-      responseData.heuristicScore > maxHeuristicScore ||
-      responseData.modelScore > maxModelScore ||
-      responseData.vectorScore.topScore > maxVectorScore;
+
+    // The injection verdict is authoritative and computed server-side. The
+    // client must never overwrite it based on its own thresholds, otherwise a
+    // tampered/buggy client could turn a "detected" verdict into "safe".
+    if (typeof (responseData as any).injectionDetected !== "boolean") {
+      throw new RebuffError(
+        "Server response is missing a valid injectionDetected verdict"
+      );
+    }
     return responseData;
   }
 

@@ -15,7 +15,8 @@ export default class Vector implements Tactic {
   }
 
   async execute(input: string, thresholdOverride?: number): Promise<TacticExecution> {
-    const threshold = thresholdOverride || this.defaultThreshold;
+    // 0 is a valid threshold boundary, so use nullish coalescing instead of `||`.
+    const threshold = thresholdOverride ?? this.defaultThreshold;
     try {
       const topK = 20;
       const results = await this.vectorStore.similaritySearchWithScore(input, topK);

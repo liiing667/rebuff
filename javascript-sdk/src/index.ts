@@ -9,6 +9,11 @@ export type {
 export {
   RebuffError
 } from "./interface";
+export {
+  validateThreshold,
+  validateBoolean,
+  validateTacticOverrides,
+} from "./validation";
 export type {
   DetectRequest,
   DetectResponse,

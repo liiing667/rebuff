@@ -29,8 +29,15 @@ export default class OpenAI implements Tactic {
         throw new Error("completion.data.choices[0].message is undefined");
       }
 
-      // FIXME: Handle when parseFloat returns NaN.
-      const score = parseFloat(completion.data.choices[0].message.content || "");
+      const rawScore = parseFloat(
+        completion.data.choices[0].message.content || ""
+      );
+      // A non-numeric model response must not poison downstream comparisons
+      // with NaN (every comparison against NaN silently evaluates to false).
+      if (Number.isNaN(rawScore) || !Number.isFinite(rawScore)) {
+        throw new RebuffError("LLM returned an invalid (non-finite) score");
+      }
+      const score = Math.min(1, Math.max(0, rawScore));
       return { score };
     } catch (error) {
       console.error("Error in callOpenAiToDetectPI:", error);

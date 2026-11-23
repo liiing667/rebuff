@@ -5,6 +5,7 @@ import {
   runMiddleware,
   checkApiKeyAndReduceBalance,
 } from "@/lib/detect-helpers";
+import { validateDetectRequestBody } from "@/lib/validation";
 import { ApiFailureResponse } from "@types";
 
 const cors = Cors({
@@ -44,16 +45,16 @@ export default async function handler(
       } as ApiFailureResponse);
     }
 
-    const {
-      userInputBase64,
-      runHeuristicCheck = true,
-      runVectorCheck = true,
-      runLanguageModelCheck = true,
-      maxHeuristicScore = null,
-      maxModelScore = null,
-      maxVectorScore = null,
-    } = req.body;
     try {
+      const {
+        userInputBase64,
+        runHeuristicCheck,
+        runVectorCheck,
+        runLanguageModelCheck,
+        maxHeuristicScore,
+        maxModelScore,
+        maxVectorScore,
+      } = validateDetectRequestBody(req.body ?? {});
       const resp = await rebuff.detectInjection({
         userInput: "",
         userInputBase64,

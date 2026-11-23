@@ -4,6 +4,8 @@ from typing import Any, Dict, Optional, Tuple, Union
 import requests
 from pydantic import BaseModel
 
+from rebuff.validation import validate_boolean, validate_threshold
+
 
 class DetectApiRequest(BaseModel):
     userInput: str
@@ -69,6 +71,20 @@ class Rebuff:
             Tuple[Union[DetectApiSuccessResponse, ApiFailureResponse], bool]: A tuple containing the detection
                 metrics and a boolean indicating if an injection was detected.
         """
+        # Reject NaN, Infinity, negative or out-of-range thresholds and
+        # non-boolean flags before the request leaves the client. The 0 and 1
+        # boundaries and the default thresholds remain valid.
+        max_heuristic_score = validate_threshold(
+            max_heuristic_score, "max_heuristic_score"
+        )
+        max_vector_score = validate_threshold(
+            max_vector_score, "max_vector_score"
+        )
+        max_model_score = validate_threshold(max_model_score, "max_model_score")
+        check_heuristic = validate_boolean(check_heuristic, "check_heuristic")
+        check_vector = validate_boolean(check_vector, "check_vector")
+        check_llm = validate_boolean(check_llm, "check_llm")
+
         request_data = DetectApiRequest(
             userInput=user_input,
             userInputBase64=encode_string(user_input),
@@ -91,18 +107,14 @@ class Rebuff:
         response_json = response.json()
         success_response = DetectApiSuccessResponse.parse_obj(response_json)
 
-        if (
-            success_response.heuristicScore > max_heuristic_score
-            or success_response.modelScore > max_model_score
-            or success_response.vectorScore["topScore"] > max_vector_score
-        ):
-            # Injection detected
-            success_response.injectionDetected = True
-            return success_response
-        else:
-            # No injection detected
-            success_response.injectionDetected = False
-            return success_response
+        # The injection verdict is authoritative and computed server-side. The
+        # client must never overwrite it based on its own thresholds, otherwise
+        # a tampered/buggy client could turn a "detected" verdict into "safe".
+        if not isinstance(success_response.injectionDetected, bool):
+            raise ValueError(
+                "Server response is missing a valid injectionDetected verdict"
+            )
+        return success_response
 
     @staticmethod
     def generate_canary_word(length: int = 8) -> str:

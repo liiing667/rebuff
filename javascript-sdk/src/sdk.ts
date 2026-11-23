@@ -15,6 +15,7 @@ import Strategy from "./lib/Strategy";
 import Heuristic from "./tactics/Heuristic";
 import OpenAI from "./tactics/OpenAI";
 import Vector from "./tactics/Vector";
+import { validateTacticOverrides } from "./validation";
 
 function generateCanaryWord(length = 8): string {
   // Generate a secure random hexadecimal canary word
@@ -83,6 +84,11 @@ export default class RebuffSdk implements Rebuff {
     if (!userInput) {
       throw new RebuffError("userInput is required");
     }
+
+    // Reject invalid thresholds (NaN/Infinity/out-of-range) and unknown tactic
+    // names before any detection work (including strategy/vector store setup)
+    // is performed.
+    validateTacticOverrides(tacticOverrides);
 
     const strategies = await this.getStrategies();
     let injectionDetected = false;

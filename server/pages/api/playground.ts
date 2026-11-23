@@ -11,6 +11,11 @@ import {
   renderPromptForSQL,
   tryUntilDeadline,
 } from "@/lib/general-helpers";
+import {
+  validateBoolean,
+  validateThreshold,
+  ValidationError,
+} from "@/lib/validation";
 type MiddlewareCallback = (result: any) => void;
 
 type ErrorResponse = {
@@ -104,19 +109,18 @@ async function getResponse(
   maxModelScore: number,
   maxVectorScore: number
 ): Promise<PromptResponse> {
-  if (
-    !(
-      typeof userInput === "string" &&
-      typeof runHeuristicCheck === "boolean" &&
-      typeof runVectorCheck === "boolean" &&
-      typeof runLanguageModelCheck === "boolean" &&
-      typeof maxHeuristicScore === "number" &&
-      typeof maxModelScore === "number" &&
-      typeof maxVectorScore === "number"
-    )
-  ) {
-    throw new Error("Invalid payload");
+  // Strict validation: NaN/Infinity pass a plain `typeof === "number"` check
+  // but break every threshold comparison, so reject them (and non-boolean
+  // flags) up front. 0 and 1 remain valid boundaries.
+  if (typeof userInput !== "string") {
+    throw new ValidationError("userInput must be a string");
   }
+  validateBoolean(runHeuristicCheck, "runHeuristicCheck");
+  validateBoolean(runVectorCheck, "runVectorCheck");
+  validateBoolean(runLanguageModelCheck, "runLanguageModelCheck");
+  validateThreshold(maxHeuristicScore, "maxHeuristicScore");
+  validateThreshold(maxModelScore, "maxModelScore");
+  validateThreshold(maxVectorScore, "maxVectorScore");
   // get baseURL of server
   const rebuffApiUrl = getEnvironmentVariable("REBUFF_API") || undefined;
   // use rebuff to check if this is a prompt injection
@@ -249,6 +253,11 @@ export default async function handler(
     //TODO: allow the user to define the parameters for defining an injection
   } catch (e) {
     console.error(e);
+    if (e instanceof ValidationError) {
+      return res
+        .status(400)
+        .json({ error: "bad_request", message: e.message });
+    }
     return res
       .status(500)
       .json({ error: "server_error", message: "something went wrong" });
