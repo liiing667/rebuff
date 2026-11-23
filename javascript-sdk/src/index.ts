@@ -7,9 +7,12 @@ export type {
   VectorDbConfig,
 } from "./config";
 export {
-  RebuffError
+  LeakLoggingError,
+  RebuffError,
+  VectorStoreInitializationError,
 } from "./interface";
 export type {
+  CanaryLeakResult,
   DetectRequest,
   DetectResponse,
   Rebuff,

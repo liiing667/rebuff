@@ -6,7 +6,13 @@ create table
     user_input text not null,
     completion text null,
     canary_word text null,
+    leak_id text null,
     metadata_json json null,
     constraint leak_logs_pkey primary key (id),
-    constraint leak_logs_account_id_fkey foreign key (account_id) references accounts (id)
+    constraint leak_logs_account_id_fkey foreign key (account_id) references accounts (id),
+    -- Idempotency key for a leak event. A unique constraint lets retries carry
+    -- the same leak_id and be deduplicated: the account of the first accepted
+    -- attempt wins, so a retry authenticated with a rotated/different API key
+    -- can never write the same event into another account.
+    constraint leak_logs_leak_id_key unique (leak_id)
   ) tablespace pg_default;

@@ -108,12 +108,34 @@ buffed_prompt, canary_word = rb.add_canary_word(prompt_template)
 # Generate a completion using your AI model (e.g., OpenAI's GPT-3)
 response_completion = rb.openai_model # defaults to "gpt-3.5-turbo"
 
-# Check if the canary word is leaked in the completion, and store it in your attack vault
-is_leak_detected = rb.is_canaryword_leaked(user_input, response_completion, canary_word)
+# Check if the canary word is leaked in the completion, and store it in your attack vault.
+# The check fails closed: if a leak IS detected but the alert/log write fails, a
+# LeakLoggingError is raised instead of silently returning "handled". Retry with the
+# same leak_id so the event is recorded exactly once and stays pinned to one account.
+try:
+    result = rb.check_canary_leak(user_input, response_completion, canary_word)
+except LeakLoggingError as exc:
+    # The leak is still a confirmed fact; retry the logging with the same leak id.
+    result = rb.check_canary_leak(
+        user_input, response_completion, canary_word, leak_id=exc.leak_id
+    )
 
-if is_leak_detected:
-  print("Canary word leaked. Take corrective action.")
+if result.leaked:
+  print(f"Canary word leaked (logged={result.logged}, leak_id={result.leak_id}). Take corrective action.")
 ```
+
+Leak handling is atomic and failure-safe:
+
+- **Fail closed**: a detected leak whose log/alert cannot be confirmed raises
+  `LeakLoggingError`; it never falls back to a "safe"/no-leak verdict.
+- **Definitive state**: `check_canary_leak` returns `leaked`, `logged` and the
+  idempotency `leak_id`, so the caller always knows the final outcome.
+- **Safe retries**: reuse the same `leak_id` (it is derived deterministically from
+  the event when omitted). The server deduplicates on `leak_id`, so a retry — even
+  one authenticated with a rotated API key that maps to another account — can never
+  duplicate the event or move it to a different account.
+- **Vector checks fail closed**: an uninitialized/unavailable vector store raises
+  `VectorStoreInitializationError` instead of being scored as a zero (no-injection).
 
 ## Self-hosting
 

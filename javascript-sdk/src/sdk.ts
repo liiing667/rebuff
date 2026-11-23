@@ -1,9 +1,12 @@
 import {
+  CanaryLeakResult,
   DetectRequest,
   DetectResponse,
+  LeakLoggingError,
   Rebuff,
   RebuffError,
   TacticResult,
+  VectorStoreInitializationError,
 } from "./interface";
 import crypto from "crypto";
 import { SdkConfig } from "./config";
@@ -21,11 +24,28 @@ function generateCanaryWord(length = 8): string {
   return crypto.randomBytes(length / 2).toString("hex");
 }
 
+// Stable idempotency key derived from the leak event content. Retrying the
+// exact same leak yields the same id even when the caller did not thread one
+// explicitly, so the event is never recorded twice.
+function deriveLeakId(
+  userInput: string,
+  completion: string,
+  canaryWord: string
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(`${canaryWord}\x1f${userInput}\x1f${completion}`)
+    .digest("hex");
+}
+
 export default class RebuffSdk implements Rebuff {
   private sdkConfig: SdkConfig;
   private vectorStore: VectorStore | undefined;
   private strategies: Record<string, Strategy> | undefined;
   private defaultStrategy: string;
+  // Leak ids already durably written through this client, making in-process
+  // retries idempotent while keeping genuine write failures fail-closed.
+  private loggedLeakIds: Set<string> = new Set();
 
   /**
    * @deprecated Use `RebuffSdk.init` instead.
@@ -124,37 +144,107 @@ export default class RebuffSdk implements Rebuff {
     return [promptWithCanary, canaryWord];
   }
 
-  isCanaryWordLeaked(
+  async isCanaryWordLeaked(
     userInput: string,
     completion: string,
     canaryWord: string,
-    logOutcome = true
-  ): boolean {
+    logOutcome = true,
+    leakId?: string
+  ): Promise<boolean> {
     // Check if the canary word appears in the completion
     if (completion.includes(canaryWord)) {
       if (logOutcome) {
-        this.logLeakage(userInput, { completion, "canary_word": canaryWord });
+        // Must be awaited: a detected leak whose log fails has to surface as
+        // an error instead of silently returning "leaked and handled".
+        await this.logLeakage(
+          userInput,
+          { completion, "canary_word": canaryWord },
+          leakId
+        );
       }
       return true;
     }
     return false;
   }
 
+  async checkCanaryLeak(
+    userInput: string,
+    completion: string,
+    canaryWord: string,
+    logOutcome = true,
+    leakId: string = crypto.randomBytes(16).toString("hex")
+  ): Promise<CanaryLeakResult> {
+    if (!completion.includes(canaryWord)) {
+      return { leaked: false, logged: false, leakId };
+    }
+    if (!logOutcome) {
+      return { leaked: true, logged: false, leakId };
+    }
+    await this.logLeakage(
+      userInput,
+      { completion, "canary_word": canaryWord },
+      leakId
+    );
+    return { leaked: true, logged: true, leakId };
+  }
+
   async getVectorStore(): Promise<VectorStore> {
     if (this.vectorStore) {
       return this.vectorStore;
     }
-    this.vectorStore = await initVectorStore(this.sdkConfig);
-    return this.vectorStore
+    try {
+      this.vectorStore = await initVectorStore(this.sdkConfig);
+    } catch (error) {
+      // Fail closed: an uninitialized vector store must never downgrade a
+      // detection/leak decision into an implicit "clean" result.
+      throw new VectorStoreInitializationError(
+        `Failed to initialize vector store: ${error}`
+      );
+    }
+    if (!this.vectorStore) {
+      throw new VectorStoreInitializationError(
+        "Vector store initialization produced no store"
+      );
+    }
+    return this.vectorStore;
   }
 
   async logLeakage(
     input: string,
-    metaData: Record<string, string>
+    metaData: Record<string, string>,
+    leakId?: string
   ): Promise<void> {
-    await (await this.getVectorStore()).addDocuments([new Document({
-      metadata: metaData,
-      pageContent: input,
-    })]);
+    const eventId =
+      leakId ??
+      deriveLeakId(
+        input,
+        metaData.completion ?? "",
+        metaData.canaryWord ?? metaData.canary_word ?? ""
+      );
+
+    // Idempotent in-process retry.
+    if (this.loggedLeakIds.has(eventId)) {
+      return;
+    }
+
+    try {
+      await (await this.getVectorStore()).addDocuments([new Document({
+        metadata: { ...metaData, leak_id: eventId },
+        pageContent: input,
+      })]);
+    } catch (error) {
+      // Preserve the specific fail-closed class for vector store init failures.
+      if (error instanceof VectorStoreInitializationError) {
+        throw error;
+      }
+      // Fail closed: the canary leaked but the alert/log write failed. The
+      // caller must retry with the same leak id, never assume a safe state.
+      throw new LeakLoggingError(
+        `Canary leak detected but failed to log it (leak_id=${eventId}). ` +
+          `Retry with the same leak id. Underlying error: ${String(error)}`,
+        eventId
+      );
+    }
+    this.loggedLeakIds.add(eventId);
   }
 }

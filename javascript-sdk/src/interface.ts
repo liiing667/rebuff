@@ -58,6 +58,33 @@ export class RebuffError extends Error {
   }
 }
 
+export class LeakLoggingError extends RebuffError {
+  constructor(message: string, readonly leakId?: string) {
+    super(message);
+    this.name = "LeakLoggingError";
+  }
+}
+
+export class VectorStoreInitializationError extends RebuffError {
+  constructor(message: string) {
+    super(message);
+    this.name = "VectorStoreInitializationError";
+  }
+}
+
+// The single, definitive outcome of a canary leak check. A failed log never
+// resolves to `{ leaked: true, logged: false }`; it rejects instead, so a
+// detected leak with an unknown alert state can never be mistaken for handled.
+export interface CanaryLeakResult {
+  // True only when the canary word was found in the completion.
+  leaked: boolean;
+  // True only when the leak was durably recorded (or a retry was deduplicated).
+  logged: boolean;
+  // Idempotency key reused on retry so the event is recorded exactly once and
+  // stays pinned to the account that first accepted it.
+  leakId: string;
+}
+
 export interface Rebuff {
   detectInjection(request: DetectRequest): Promise<DetectResponse>;
 
@@ -71,8 +98,21 @@ export interface Rebuff {
     userInput: string,
     completion: string,
     canaryWord: string,
-    logOutcome?: boolean
-  ): boolean;
+    logOutcome?: boolean,
+    leakId?: string
+  ): Promise<boolean>;
 
-  logLeakage(input: string, metaData: Record<string, string>): Promise<void>;
+  checkCanaryLeak(
+    userInput: string,
+    completion: string,
+    canaryWord: string,
+    logOutcome?: boolean,
+    leakId?: string
+  ): Promise<CanaryLeakResult>;
+
+  logLeakage(
+    input: string,
+    metaData: Record<string, string>,
+    leakId?: string
+  ): Promise<void>;
 }

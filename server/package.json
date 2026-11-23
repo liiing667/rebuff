@@ -10,7 +10,8 @@
     "build": "next build",
     "build:css": "tailwindcss -m -i ./styles/tailwind.css -o styles/app.css",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:unit": "mocha"
   },
   "license": "Apache-2.0",
   "dependencies": {

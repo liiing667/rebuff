@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:debug": "eslint src/sdk.ts --debug",
-    "test": "tests/setup-and-run-tests.sh"
+    "test": "tests/setup-and-run-tests.sh",
+    "test:unit": "mocha tests/canary-leak.test.ts"
   },
   "repository": {
     "type": "git",

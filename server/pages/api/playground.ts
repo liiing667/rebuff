@@ -159,7 +159,9 @@ async function getResponse(
     throw new Error("No response from LLM");
   }
   // check if the canary word is in the response
-  const canaryWordLeaked = rebuff.isCanaryWordLeaked(
+  // Awaited: if the leak is detected but the log/alert write fails, the error
+  // propagates (fail closed) instead of reporting the event as handled.
+  const canaryWordLeaked = await rebuff.isCanaryWordLeaked(
     userInput,
     LLMResponse.completion,
     canaryWord
