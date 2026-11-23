@@ -59,11 +59,27 @@ export default async function handler(
       } as LogApiSuccessResponse);
     }
 
-    const {
-      user_input: userInput,
-      completion,
-      canaryWord,
-    } = req.body as LogApiRequest;
+    const body = (req.body ?? {}) as LogApiRequest & {
+      userInput?: string;
+      canary_word?: string;
+      metaData?: Record<string, string>;
+    };
+    // Accept both the current request shape and the legacy shape emitted by
+    // older JS clients, so a canary is always logged with the identity that
+    // was actually checked.
+    const userInput =
+      body["user_input"] ??
+      body.userInput ??
+      body.metaData?.["user_input"] ??
+      "";
+    const completion =
+      body.completion ?? body.metaData?.completion ?? "";
+    const canaryWord =
+      body.canaryWord ??
+      body["canary_word"] ??
+      body.metaData?.canaryWord ??
+      body.metaData?.["canary_word"] ??
+      "";
 
     const { error } = await supabaseAdminClient.from("leak_logs").insert([
       {
@@ -85,7 +101,11 @@ export default async function handler(
       } as ApiFailureResponse);
     }
 
-    await rebuff.logLeakage(userInput, { accountId });
+    await rebuff.logLeakage(userInput, {
+      accountId,
+      // eslint-disable-next-line camelcase
+      canary_word: canaryWord,
+    });
 
     return res.status(200).json({
       success: true,

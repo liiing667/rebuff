@@ -5,21 +5,20 @@ import {
   RebuffError,
   TacticResult,
 } from "./interface";
-import crypto from "crypto";
 import { SdkConfig } from "./config";
 import initVectorStore from "./lib/vectordb";
 import getOpenAIInstance from "./lib/openai";
+import {
+  DEFAULT_CANARY_FORMAT,
+  embedCanary,
+  isCanaryLeaked,
+} from "./lib/canary";
 import { VectorStore } from "langchain/vectorstores/base";
 import { Document } from "langchain/document";
 import Strategy from "./lib/Strategy";
 import Heuristic from "./tactics/Heuristic";
 import OpenAI from "./tactics/OpenAI";
 import Vector from "./tactics/Vector";
-
-function generateCanaryWord(length = 8): string {
-  // Generate a secure random hexadecimal canary word
-  return crypto.randomBytes(length / 2).toString("hex");
-}
 
 export default class RebuffSdk implements Rebuff {
   private sdkConfig: SdkConfig;
@@ -115,25 +114,26 @@ export default class RebuffSdk implements Rebuff {
 
   addCanaryWord(
     prompt: string,
-    canaryWord: string = generateCanaryWord(),
-    canaryFormat = "<!-- {canary_word} -->"
+    canaryWord?: string,
+    canaryFormat = DEFAULT_CANARY_FORMAT
   ): [string, string] {
-    // Embed the canary word in the specified format
-    const canaryComment = canaryFormat.replace("{canary_word}", canaryWord);
-    const promptWithCanary = `${canaryComment}\n${prompt}`;
-    return [promptWithCanary, canaryWord];
+    const canary = embedCanary(prompt, canaryWord, canaryFormat);
+    return [canary.prompt, canary.canaryWord];
   }
 
   isCanaryWordLeaked(
     userInput: string,
     completion: string,
     canaryWord: string,
-    logOutcome = true
+    logOutcome = true,
+    canaryFormat?: string
   ): boolean {
-    // Check if the canary word appears in the completion
-    if (completion.includes(canaryWord)) {
+    // Check the same identity that was embedded, not an arbitrary substring.
+    if (isCanaryLeaked(completion, canaryWord, canaryFormat)) {
       if (logOutcome) {
-        this.logLeakage(userInput, { completion, "canary_word": canaryWord });
+        const metaData: Record<string, string> = { completion };
+        metaData["canary_word"] = canaryWord;
+        this.logLeakage(userInput, metaData);
       }
       return true;
     }

@@ -102,8 +102,11 @@ export function formatSQL(sql: string): string {
   return formattedSql;
 }
 
-export function renderPromptForSQL(userInput: string) {
-  return `<!-- {canary_word} -->
+export function renderPromptForSQL(userInput: string, canaryWord?: string) {
+  const canaryMarker = canaryWord
+    ? `<!-- ${canaryWord} -->`
+    : "<!-- {canary_word} -->";
+  return `${canaryMarker}
 You are a data analyst for an ecommerce store. The database schema is: 
 CREATE TABLE customers( customer_id TEXT PRIMARY KEY, name TEXT, address TEXT, phone TEXT, email TEXT); 
 CREATE TABLE products( product_id TEXT PRIMARY KEY, name TEXT, description TEXT, category TEXT, price INTEGER, stock INTEGER ); 

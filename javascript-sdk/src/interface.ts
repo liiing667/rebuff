@@ -71,7 +71,8 @@ export interface Rebuff {
     userInput: string,
     completion: string,
     canaryWord: string,
-    logOutcome?: boolean
+    logOutcome?: boolean,
+    canaryFormat?: string
   ): boolean;
 
   logLeakage(input: string, metaData: Record<string, string>): Promise<void>;

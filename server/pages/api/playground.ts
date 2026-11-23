@@ -46,11 +46,9 @@ function runMiddleware(
   });
 }
 
-async function callOpenAiToGetSQLQuery(
-  inputText: string
+async function callOpenAiWithPrompt(
+  renderedPrompt: string
 ): Promise<{ completion: string; error: Error | null }> {
-  const renderedPrompt = await renderPromptForSQL(inputText);
-
   const completion = await openai.createChatCompletion({
     model: "gpt-3.5-turbo",
     messages: [{ role: "user", content: renderedPrompt }],
@@ -143,11 +141,15 @@ async function getResponse(
       canary_word_leaked: false,
     };
   }
-  // if it is not a prompt injection, add a canary word to the prompt before we send it to the LLM
-  const [promptWithCanary, canaryWord] = rebuff.addCanaryWord(userInput);
+  // If it is not a prompt injection, add a canary word to the prompt before we
+  // send it to the LLM. Use the legacy SQL template so its placeholder and the
+  // marker we check/log are the same identity.
+  const [promptWithCanary, canaryWord] = rebuff.addCanaryWord(
+    renderPromptForSQL(userInput)
+  );
   const LLMResponse = await tryUntilDeadline(
     5000,
-    callOpenAiToGetSQLQuery(promptWithCanary),
+    callOpenAiWithPrompt(promptWithCanary),
     (response: any) =>
       typeof response.completion === "string" && response.completion.length > 0
   );

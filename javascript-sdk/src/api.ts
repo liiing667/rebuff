@@ -5,8 +5,12 @@ import {
   RebuffError,
 } from "./interface";
 import fetch from "node-fetch";
-import crypto from "crypto";
 import { ApiConfig } from "./config";
+import {
+  DEFAULT_CANARY_FORMAT,
+  embedCanary,
+  isCanaryLeaked,
+} from "./lib/canary";
 
 function encodeString(message: string): string {
   return Buffer.from(message, "utf-8").toString("hex");
@@ -20,10 +24,6 @@ export interface LogApiRequest {
 
 export interface LogApiSuccessResponse {
   success: boolean;
-}
-function generateCanaryWord(length = 8): string {
-  // Generate a secure random hexadecimal canary word
-  return crypto.randomBytes(length / 2).toString("hex");
 }
 
 export default class RebuffApi implements Rebuff {
@@ -85,23 +85,22 @@ export default class RebuffApi implements Rebuff {
 
   addCanaryWord(
     prompt: string,
-    canaryWord: string = generateCanaryWord(),
-    canaryFormat = "<!-- {canary_word} -->"
+    canaryWord?: string,
+    canaryFormat = DEFAULT_CANARY_FORMAT
   ): [string, string] {
-    // Embed the canary word in the specified format
-    const canaryComment = canaryFormat.replace("{canary_word}", canaryWord);
-    const promptWithCanary = `${canaryComment}\n${prompt}`;
-    return [promptWithCanary, canaryWord];
+    const canary = embedCanary(prompt, canaryWord, canaryFormat);
+    return [canary.prompt, canary.canaryWord];
   }
 
   isCanaryWordLeaked(
     userInput: string,
     completion: string,
     canaryWord: string,
-    logOutcome = true
+    logOutcome = true,
+    canaryFormat?: string
   ): boolean {
-    // Check if the canary word appears in the completion
-    if (completion.includes(canaryWord)) {
+    // Check the same identity that was embedded, not an arbitrary substring.
+    if (isCanaryLeaked(completion, canaryWord, canaryFormat)) {
       if (logOutcome) {
         this.logLeakage(userInput, { completion, canaryWord });
       }
@@ -114,9 +113,12 @@ export default class RebuffApi implements Rebuff {
     userInput: string,
     metaData: Record<string, string>
   ): Promise<void> {
+    const canaryWord =
+      metaData.canaryWord ?? metaData["canary_word"] ?? "";
     const data = {
-      userInput,
-      metaData,
+      user_input: userInput,
+      completion: metaData.completion ?? "",
+      canaryWord,
     };
 
     const response = await fetch(`${this.apiUrl}/api/log`, {
