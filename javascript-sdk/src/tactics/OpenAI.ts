@@ -1,6 +1,12 @@
 import { RebuffError, TacticName } from "../interface";
 import { OpenAIApi } from "openai";
-import { renderPromptForPiDetection } from "../lib/prompts";
+import {
+  PI_DETECTION_TEMPLATE_VERSION,
+  buildPiDetectionMessages,
+  parseScoreFromCompletion,
+  piDetectionBoundary,
+  piDetectionBoundaryHits,
+} from "../lib/prompts";
 import Tactic, { TacticExecution } from "./Tactic";
 
 export default class OpenAI implements Tactic {
@@ -19,9 +25,9 @@ export default class OpenAI implements Tactic {
     try {
       const completion = await this.openai.createChatCompletion({
         model: this.model,
-        messages: [{ role: "user", content: renderPromptForPiDetection(input) }],
+        messages: buildPiDetectionMessages(input),
       });
-  
+
       if (completion.data.choices.length === 0) {
         throw new Error("completion.data.choices.length === 0");
       }
@@ -29,9 +35,19 @@ export default class OpenAI implements Tactic {
         throw new Error("completion.data.choices[0].message is undefined");
       }
 
-      // FIXME: Handle when parseFloat returns NaN.
-      const score = parseFloat(completion.data.choices[0].message.content || "");
-      return { score };
+      const score = parseScoreFromCompletion(
+        completion.data.choices[0].message.content
+      );
+      const boundary = piDetectionBoundary(input);
+      return {
+        score,
+        additionalFields: {
+          raw_response: completion.data.choices[0].message.content,
+          template_version: PI_DETECTION_TEMPLATE_VERSION,
+          boundary_id: boundary.token,
+          boundary_hits: piDetectionBoundaryHits(input),
+        },
+      };
     } catch (error) {
       console.error("Error in callOpenAiToDetectPI:", error);
       throw new RebuffError("Error in getting score for large language model");

@@ -4,6 +4,14 @@ import stringSimilarity from "string-similarity";
 import { supabaseAdminClient } from "@/lib/supabase";
 import { openai } from "@/lib/openai";
 import { getEnvironmentVariable, normalizeString } from "@/lib/general-helpers";
+import {
+  buildPiDetectionMessagesFromPrompt,
+  extractUserInputFromPrompt,
+  parseScoreFromCompletion,
+  PI_DETECTION_TEMPLATE_VERSION,
+  piDetectionBoundary,
+  piDetectionBoundaryHits,
+} from "@/lib/templates";
 type MiddlewareCallback = (result: any) => void;
 
 export function runMiddleware(
@@ -295,26 +303,73 @@ export function detectPromptInjectionUsingHeuristicOnInput(
 
 export async function callOpenAiToDetectPI(
   promptToDetectPiUsingOpenAI: string
-): Promise<{ completion: string; error?: string }> {
+): Promise<{
+  completion: string;
+  error?: string;
+  template_version?: string;
+  score?: number;
+  boundary_id?: string;
+  boundary_hits?: string[];
+}> {
   try {
+    const extractedInput =
+      extractUserInputFromPrompt(promptToDetectPiUsingOpenAI) ??
+      promptToDetectPiUsingOpenAI;
+    const { token: boundaryId } = piDetectionBoundary(extractedInput);
+    const boundaryHits = piDetectionBoundaryHits(extractedInput);
+    const messages = buildPiDetectionMessagesFromPrompt(
+      promptToDetectPiUsingOpenAI
+    );
+
     const completion = await openai.createChatCompletion({
       model: "gpt-3.5-turbo",
-      messages: [{ role: "user", content: promptToDetectPiUsingOpenAI }],
+      messages,
     });
-
-    if (completion.data.choices[0].message === undefined) {
-      console.log("completion.data.choices[0].message is undefined");
-      return { completion: "", error: "server_error" };
-    }
 
     if (completion.data.choices.length === 0) {
       console.log("completion.data.choices.length === 0");
-      return { completion: "", error: "server_error" };
+      return {
+        completion: "",
+        error: "server_error",
+        boundary_id: boundaryId,
+        boundary_hits: boundaryHits,
+        template_version: PI_DETECTION_TEMPLATE_VERSION,
+      };
+    }
+
+    if (completion.data.choices[0].message === undefined) {
+      console.log("completion.data.choices[0].message is undefined");
+      return {
+        completion: "",
+        error: "server_error",
+        boundary_id: boundaryId,
+        boundary_hits: boundaryHits,
+        template_version: PI_DETECTION_TEMPLATE_VERSION,
+      };
+    }
+
+    const rawCompletion = completion.data.choices[0].message.content ?? "";
+    let score: number;
+    try {
+      score = parseScoreFromCompletion(rawCompletion);
+    } catch (error) {
+      console.log("completion is not a complete valid score", error);
+      return {
+        completion: rawCompletion,
+        error: "invalid_score",
+        boundary_id: boundaryId,
+        boundary_hits: boundaryHits,
+        template_version: PI_DETECTION_TEMPLATE_VERSION,
+      };
     }
 
     return {
-      completion: completion.data.choices[0].message.content,
+      completion: rawCompletion,
+      score,
       error: undefined,
+      boundary_id: boundaryId,
+      boundary_hits: boundaryHits,
+      template_version: PI_DETECTION_TEMPLATE_VERSION,
     };
   } catch (error) {
     console.error("Error in callOpenAiToDetectPI:", error);

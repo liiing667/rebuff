@@ -1,15 +1,26 @@
 import secrets
-from typing import Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import rebuff.detect_pi_openai as _pi_detection_module
 from langchain_core.prompts import PromptTemplate
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from rebuff.detect_pi_heuristics import detect_prompt_injection_using_heuristic_on_input
 from rebuff.detect_pi_openai import (
+    PI_DETECTION_TEMPLATE_VERSION,
     call_openai_to_detect_pi,
+    parse_score_from_completion,
+    pi_detection_boundary,
+    pi_detection_boundary_hits,
     render_prompt_for_pi_detection,
+    user_input_digest,
 )
 from rebuff.detect_pi_vectorbase import detect_pi_using_vector_database, init_pinecone
+from rebuff.errors import RebuffError
+
+
+_ORIGINAL_RENDER_PROMPT = render_prompt_for_pi_detection
+_ORIGINAL_CALL_OPENAI = call_openai_to_detect_pi
 
 
 class RebuffDetectionResponse(BaseModel):
@@ -23,6 +34,35 @@ class RebuffDetectionResponse(BaseModel):
     max_model_score: float
     max_vector_score: float
     injection_detected: bool
+    # Evidence shared by the template, model call and score consumer.  These
+    # fields are optional so existing callers that construct the model with
+    # only the original fields keep working.
+    template_version: Optional[str] = None
+    raw_model_output: Optional[str] = None
+    raw_model_response: Optional[str] = None
+    raw_score: Optional[float] = None
+    input_sha256: Optional[str] = None
+    input_digest: Optional[str] = None
+    input_length: Optional[int] = None
+    boundary_id: Optional[str] = None
+    boundary_hits: List[str] = Field(default_factory=list)
+    evidence: Dict[str, Any] = Field(default_factory=dict)
+
+    # Compatibility aliases for evidence consumers that use the model_*
+    # spelling.  These are properties, not fields, so they do not create new
+    # serialized response keys.
+    @property
+    def model_output(self) -> Optional[str]:
+        return self.raw_model_output
+
+    @property
+    def model_raw_response(self) -> Optional[str]:
+        return self.raw_model_response
+
+    @property
+    def model_error(self) -> Optional[str]:
+        error = self.evidence.get("error")
+        return str(error) if error is not None else None
 
 
 class RebuffSdk:
@@ -72,6 +112,9 @@ class RebuffSdk:
             RebuffDetectionResponse
         """
 
+        if not isinstance(user_input, str):
+            raise RebuffError("user_input must be a string")
+
         injection_detected = False
 
         if check_heuristic:
@@ -93,13 +136,65 @@ class RebuffSdk:
         else:
             rebuff_vector_score = 0
 
+        raw_completion: Any = None
         if check_llm:
-            rendered_input = render_prompt_for_pi_detection(user_input)
-            model_response = call_openai_to_detect_pi(
-                rendered_input, self.openai_model, self.openai_apikey
+            renderer = (
+                render_prompt_for_pi_detection
+                if render_prompt_for_pi_detection is not _ORIGINAL_RENDER_PROMPT
+                else _pi_detection_module.render_prompt_for_pi_detection
             )
+            rendered_input = renderer(user_input)
+            caller = (
+                call_openai_to_detect_pi
+                if call_openai_to_detect_pi is not _ORIGINAL_CALL_OPENAI
+                else _pi_detection_module.call_openai_to_detect_pi
+            )
+            try:
+                model_response = caller(
+                    rendered_input, self.openai_model, self.openai_apikey
+                )
+            except Exception as error:
+                evidence = self._model_evidence(user_input, None, error=str(error))
+                raise RebuffError(
+                    "Language model detection failed; refusing to publish a safe score",
+                    evidence=evidence,
+                ) from error
 
-            rebuff_model_score = float(model_response.get("completion", 0))
+            if not isinstance(model_response, dict):
+                model_response = {"completion": model_response}
+
+            raw_completion = model_response.get("completion")
+            if raw_completion is None:
+                for score_key in ("score", "raw_score"):
+                    if score_key in model_response:
+                        # Consumers that already parsed the raw response share
+                        # the same score contract rather than falling back to
+                        # 0.0.
+                        raw_completion = model_response.get(score_key)
+                        break
+            model_error = model_response.get("error")
+            if model_error:
+                evidence = self._model_evidence(
+                    user_input, raw_completion, error=str(model_error)
+                )
+                raise RebuffError(
+                    "Language model detection failed; refusing to publish a safe score",
+                    evidence=evidence,
+                )
+
+            try:
+                # The raw model value is the only score source.  Missing,
+                # empty, multi-value or otherwise malformed responses fail
+                # closed instead of becoming a default 0.0.
+                rebuff_model_score = parse_score_from_completion(raw_completion)
+            except (TypeError, ValueError) as error:
+                evidence = self._model_evidence(
+                    user_input, raw_completion, error=str(error)
+                )
+                raise RebuffError(
+                    "Language model returned an invalid score; refusing to publish a safe score",
+                    evidence=evidence,
+                ) from error
 
         else:
             rebuff_model_score = 0
@@ -111,6 +206,11 @@ class RebuffSdk:
         ):
             injection_detected = True
 
+        model_evidence = (
+            self._model_evidence(user_input, raw_completion)
+            if check_llm
+            else {}
+        )
         rebuff_response = RebuffDetectionResponse(
             heuristic_score=rebuff_heuristic_score,
             openai_score=rebuff_model_score,
@@ -122,8 +222,66 @@ class RebuffSdk:
             max_model_score=max_model_score,
             max_vector_score=max_vector_score,
             injection_detected=injection_detected,
+            template_version=PI_DETECTION_TEMPLATE_VERSION if check_llm else None,
+            raw_model_output=(
+                raw_completion if check_llm and isinstance(raw_completion, str) else None
+            ),
+            raw_model_response=(
+                raw_completion if check_llm and isinstance(raw_completion, str) else None
+            ),
+            raw_score=rebuff_model_score if check_llm else None,
+            input_sha256=user_input_digest(user_input),
+            input_digest=user_input_digest(user_input),
+            input_length=len(user_input),
+            boundary_id=(
+                pi_detection_boundary(user_input)[0] if check_llm else None
+            ),
+            boundary_hits=model_evidence.get("boundary_hits", []),
+            evidence=model_evidence,
         )
         return rebuff_response
+
+    def _model_evidence(
+        self,
+        user_input: str,
+        raw_completion: Any,
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build evidence that points back to the exact input and template."""
+
+        token = pi_detection_boundary(user_input)[0]
+        boundary_hits = pi_detection_boundary_hits(user_input)
+
+        evidence: Dict[str, Any] = {
+            "input_sha256": user_input_digest(user_input),
+            "input_digest": user_input_digest(user_input),
+            "input_hash": user_input_digest(user_input),
+            "input_length": len(user_input),
+            "original_input_length": len(user_input),
+            "template_version": PI_DETECTION_TEMPLATE_VERSION,
+            "boundary_id": token,
+            "boundary_token": token,
+            "model": self.openai_model,
+            "model_output": raw_completion,
+            "raw_model_output": raw_completion,
+            "raw_response": raw_completion,
+            "model_response": raw_completion,
+            "model_raw_response": raw_completion,
+            "completion": raw_completion,
+            "boundary_hits": boundary_hits,
+        }
+        try:
+            evidence["raw_score"] = parse_score_from_completion(raw_completion)
+        except (TypeError, ValueError):
+            evidence["raw_score"] = raw_completion
+        evidence["parsed_score"] = evidence["raw_score"] if isinstance(
+            evidence["raw_score"], float
+        ) else None
+        if error is not None:
+            evidence["error"] = error
+            evidence["model_error"] = error
+            evidence["error_detail"] = error
+        return evidence
 
     @staticmethod
     def generate_canary_word(length: int = 8) -> str:
