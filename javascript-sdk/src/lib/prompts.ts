@@ -1,8 +1,27 @@
-// Normalize a string by converting to lowercase and removing extra spaces and punctuation
+// Zero-width / bidi / invisible formatting characters that can be used to hide
+// or join words without changing how a human reads the text.
+const INVISIBLE_CHARACTERS_PATTERN =
+  /[\u00ad\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b\u200c\u200d\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\u206a-\u206f\ufeff]/g;
+
+// Normalize a string so visually equivalent text keeps one identity.
+//
+// This must stay byte-for-byte equivalent to normalize_string() in the
+// Python SDK so the local SDK and the API produce identical heuristic
+// scores and rejection decisions:
+// * NFKC folds full-width Latin letters (e.g. "Ｉｇｎｏｒｅ") onto ASCII.
+// * Zero-width, bidi and other invisible formatting characters are dropped.
+// * Punctuation (including full-width punctuation such as "，" or "。")
+//   becomes a space instead of being deleted, so adjacent words are never
+//   silently glued together.
+// * Everything is lower-cased and runs of whitespace collapse to one space.
+// * Non-English letters are preserved, so ordinary non-English text never
+//   matches the English injection keyword list.
 export function normalizeString(str: string): string {
   return str
+    .normalize("NFKC")
+    .replace(INVISIBLE_CHARACTERS_PATTERN, "")
     .toLowerCase()
-    .replace(/[^\w\s]|_/g, "")
+    .replace(/[^\w\s]|_/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

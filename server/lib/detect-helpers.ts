@@ -242,6 +242,54 @@ export function generateInjectionKeywords() {
 // Generate and print the injection keywords
 const injectionKeywords = generateInjectionKeywords();
 
+const MAX_MATCHED_WORDS = 5;
+
+// Score a whitespace-free substring against the whitespace-free keyword.
+// Each keyword word that appears in order inside the substring counts as a
+// matched word, so splitting the letters of a word with spaces, hyphens or
+// zero-width characters no longer lowers the score. Consecutive keyword
+// words may only be separated by a couple of characters, which is enough
+// room for obfuscation characters but prevents unrelated words from
+// different parts of a benign sentence from being stitched together. Short
+// keyword words and single-word coincidences are ignored to avoid flagging
+// ordinary text.
+function getCompactMatchedWordsScore(
+  substring: string,
+  keywordParts: string[],
+  maxMatchedWords: number
+): number {
+  let matchedWordsCount = 0;
+  let cursor = 0;
+  let previousEnd = -1;
+  const maxGap = 2;
+
+  for (const part of keywordParts) {
+    // Skip short particles (e.g. "to", "do", "not") whose letters occur
+    // naturally inside many benign words.
+    if (part.length < 4) {
+      continue;
+    }
+    const position = substring.indexOf(part, cursor);
+    if (position === -1) {
+      continue;
+    }
+    if (previousEnd !== -1 && position - previousEnd > maxGap) {
+      break;
+    }
+    matchedWordsCount += 1;
+    previousEnd = position + part.length;
+    cursor = previousEnd;
+  }
+
+  // A single shared content word appears in plenty of harmless text, so at
+  // least two keyword words must be present before this pass contributes.
+  if (matchedWordsCount < 2) {
+    return 0;
+  }
+
+  return 0.5 + 0.5 * Math.min(matchedWordsCount / maxMatchedWords, 1);
+}
+
 // Return the highest score, ensure the score is normalized between 0 and 1
 // based on the amount of consecutive words matched and the similarity score
 export function detectPromptInjectionUsingHeuristicOnInput(
@@ -249,11 +297,15 @@ export function detectPromptInjectionUsingHeuristicOnInput(
 ): number {
   let highestScore = 0;
   const normalizedInput = normalizeString(input);
+  // Whitespace-free view of the input used to detect letter-level word
+  // splitting such as "i g n o r e ..." or "ig-nore ...".
+  const compactInput = normalizedInput.split(" ").join("");
 
   for (const keyword of injectionKeywords) {
     const normalizedKeyword = normalizeString(keyword);
     const keywordParts = normalizedKeyword.split(" ");
     const keywordLength = keywordParts.length;
+    const compactKeyword = normalizedKeyword.split(" ").join("");
 
     // Generate substrings of similar length in the input string
     const inputParts = normalizedInput.split(" ");
@@ -273,19 +325,44 @@ export function detectPromptInjectionUsingHeuristicOnInput(
       const matchedWordsCount = keywordParts.filter(
         (part, index) => substring.split(" ")[index] === part
       ).length;
-      const maxMatchedWords = 5;
       const baseScore =
         matchedWordsCount > 0
-          ? 0.5 + 0.5 * Math.min(matchedWordsCount / maxMatchedWords, 1)
+          ? 0.5 + 0.5 * Math.min(matchedWordsCount / MAX_MATCHED_WORDS, 1)
           : 0;
 
       // Adjust the score using the similarity score
       const adjustedScore =
-        baseScore - similarityScore * (1 / (maxMatchedWords * 2));
+        baseScore - similarityScore * (1 / (MAX_MATCHED_WORDS * 2));
 
       // Update the highest score if the current adjusted score is higher
       if (adjustedScore > highestScore) {
         highestScore = adjustedScore;
+      }
+    }
+
+    // Compact pass: slide a window over the whitespace-free input so
+    // attacks whose words have been split apart letter by letter still
+    // receive the same score as the unsplit phrase.
+    for (let i = 0; i <= compactInput.length - compactKeyword.length; i++) {
+      const compactSubstring = compactInput.slice(
+        i,
+        i + compactKeyword.length
+      );
+      const compactSimilarityScore = stringSimilarity.compareTwoStrings(
+        compactKeyword,
+        compactSubstring
+      );
+      const compactBaseScore = getCompactMatchedWordsScore(
+        compactSubstring,
+        keywordParts,
+        MAX_MATCHED_WORDS
+      );
+      const compactAdjustedScore =
+        compactBaseScore -
+        compactSimilarityScore * (1 / (MAX_MATCHED_WORDS * 2));
+
+      if (compactAdjustedScore > highestScore) {
+        highestScore = compactAdjustedScore;
       }
     }
   }
